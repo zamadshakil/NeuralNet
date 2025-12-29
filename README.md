@@ -1,51 +1,90 @@
 # NeuralNet++
 
-NeuralNet++ is a tiny, self-contained feed-forward neural network engine written in modern C++. It focuses on clarity and OOP composition (Network → Layers → Neurons) while still supporting training with backpropagation, persistence, and a simple CLI for demos.
+A simple, self-contained feed-forward neural network engine in C++.
+
+Built for learning — focuses on clarity and OOP composition:
+```
+NeuralNetwork → Layers → Neurons
+```
 
 ## Features
-- Dense fully-connected layers with sigmoid activation
-- Backpropagation + gradient descent with configurable learning rate and epochs
-- Built-in XOR dataset demo with before/after predictions and loss
-- Save/load topology and weights to reuse trained models
-- CLI commands for train, test, predict, demo, save, and load
+
+- **Dense layers** with sigmoid activation  
+- **Backpropagation** with configurable learning rate & epochs  
+- **XOR demo** showing before/after predictions  
+- **Save/Load** trained weights to file  
+- **Interactive CLI** menu for easy use  
 
 ## Build
-```
+
+```bash
 g++ -std=c++17 src/main.cpp -o neuralnet
 ```
 
-## CLI usage
+## Usage
+
+### Interactive Mode (recommended)
+```bash
+./neuralnet
 ```
-./neuralnet demo [--epochs N] [--lr V]
-./neuralnet train [--epochs N] [--lr V] [--save file]
-./neuralnet test [--weights file]
-./neuralnet predict x y [--weights file]
-./neuralnet save file
-./neuralnet load file
+Opens a menu where you can train, test, predict, save, and load:
+```
+========================================
+       NeuralNet++ Interactive Menu
+========================================
+  1. Train network on XOR
+  2. Test current network
+  3. Predict custom input
+  4. Save weights to file
+  5. Load weights from file
+  6. Run full demo
+  0. Exit
+----------------------------------------
 ```
 
-### Quick demo
-Runs XOR training with defaults (epochs=5000, lr=0.5) and prints predictions before/after:
-```
+### Quick Demo
+```bash
 ./neuralnet demo
 ```
+Trains on XOR and shows before/after predictions.
 
-### Train and save
+## Example Output
+
 ```
-./neuralnet train --epochs 8000 --lr 0.4 --save xor.weights
+BEFORE training (random weights):
+  Input     | Predicted | Target
+  ----------|-----------|-------
+  [0, 0]    |   0.65    |  0
+  [0, 1]    |   0.62    |  1
+  [1, 0]    |   0.64    |  1
+  [1, 1]    |   0.61    |  0
+
+Training for 5000 epochs...
+  Epoch  1000 | Loss: 0.100156
+  Epoch  2000 | Loss: 0.002947
+  ...
+
+AFTER training:
+  Input     | Predicted | Target
+  ----------|-----------|-------
+  [0, 0]    |   0.01    |  0
+  [0, 1]    |   0.97    |  1
+  [1, 0]    |   0.97    |  1
+  [1, 1]    |   0.04    |  0
 ```
 
-### Test a saved model
-```
-./neuralnet test --weights xor.weights
-```
+## OOP Design
 
-### Predict custom input
-```
-./neuralnet predict 1 0 --weights xor.weights
-```
+| Class | Purpose |
+|-------|---------|
+| `MathUtils` | Sigmoid, derivative, random weights |
+| `Neuron` | Holds value, bias, gradient, weights |
+| `Layer` | Collection of neurons at same depth |
+| `NeuralNetwork` | Engine: predict, train, save, load |
+| `Dataset` | Provides XOR training samples |
 
 ## Notes
-- Model files store the topology, weights, and biases so training progress is preserved across runs.
-- Loss is Mean Squared Error; sigmoid derivative is used for backpropagation.
-- Default topology for the XOR task is 2-3-1; adjust in code if experimenting with other shapes.
+
+- Topology: 2 inputs → 3 hidden → 1 output (for XOR)
+- Loss: Mean Squared Error
+- Weights file stores topology + all weights/biases

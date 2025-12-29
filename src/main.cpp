@@ -1,23 +1,37 @@
+/*
+ * NeuralNet++ - A Simple Feed-Forward Neural Network in C++
+ * 
+ * This is a learning-focused implementation showing OOP composition:
+ *   Network → Layers → Neurons
+ * 
+ * Features: Training with backpropagation, XOR demo, save/load weights
+ */
+
 #include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <random>
-#include <stdexcept>
 #include <string>
-#include <sstream>
 #include <vector>
 
+// ============================================================================
+// MathUtils - Helper functions for neural network math
+// ============================================================================
 class MathUtils {
 public:
+    // Sigmoid squashes any value to range (0, 1)
     static double sigmoid(double x) {
         return 1.0 / (1.0 + std::exp(-x));
     }
 
-    static double sigmoidDerivativeFromOutput(double output) {
-        return output * (1.0 - output);
+    // Derivative of sigmoid (used in backpropagation)
+    // Note: takes the OUTPUT of sigmoid, not the input
+    static double sigmoidDerivative(double sigmoidOutput) {
+        return sigmoidOutput * (1.0 - sigmoidOutput);
     }
 
+    // Random weight between -1 and 1
     static double randomWeight() {
         static std::mt19937 rng(std::random_device{}());
         static std::uniform_real_distribution<double> dist(-1.0, 1.0);
@@ -25,389 +39,412 @@ public:
     }
 };
 
+// ============================================================================
+// Sample - One training example (inputs and expected outputs)
+// ============================================================================
 struct Sample {
     std::vector<double> inputs;
     std::vector<double> targets;
 };
 
+// ============================================================================
+// Neuron - A single node in the network
+// ============================================================================
 class Neuron {
 public:
-    explicit Neuron(size_t outgoingCount = 0, bool withBias = true)
-        : value(0.0), bias(withBias ? MathUtils::randomWeight() : 0.0), gradient(0.0), outgoingWeights(outgoingCount) {
-        for (double &w : outgoingWeights) {
+    double value = 0.0;                      // Current activation value
+    double bias = 0.0;                       // Bias term (added before activation)
+    double gradient = 0.0;                   // Error gradient (for training)
+    std::vector<double> weights;             // Weights to next layer neurons
+
+    // Create neuron with random weights connecting to next layer
+    Neuron(int numOutputs, bool hasBias = true) {
+        bias = hasBias ? MathUtils::randomWeight() : 0.0;
+        weights.resize(numOutputs);
+        for (double& w : weights) {
             w = MathUtils::randomWeight();
         }
     }
-
-    double value;
-    double bias;
-    double gradient;
-    std::vector<double> outgoingWeights;
 };
 
+// ============================================================================
+// Layer - A collection of neurons at the same depth
+// ============================================================================
 class Layer {
 public:
-    Layer(size_t neuronCount = 0, size_t outgoingCount = 0, bool isInput = false) {
-        neurons.reserve(neuronCount);
-        for (size_t i = 0; i < neuronCount; ++i) {
-            neurons.emplace_back(outgoingCount, !isInput);
+    std::vector<Neuron> neurons;
+
+    // Create a layer with specified neurons, each connected to next layer
+    Layer(int numNeurons, int numOutputs, bool isInputLayer = false) {
+        for (int i = 0; i < numNeurons; i++) {
+            neurons.emplace_back(numOutputs, !isInputLayer);
         }
     }
-
-    std::vector<Neuron> neurons;
 };
 
+// ============================================================================
+// NeuralNetwork - The main engine (holds layers, does training)
+// ============================================================================
 class NeuralNetwork {
 public:
-    NeuralNetwork() = default;
+    double learningRate;
 
-    NeuralNetwork(const std::vector<size_t> &topology, double learningRate)
-        : learningRate(learningRate) {
-        if (topology.size() < 2) {
-            throw std::invalid_argument("Topology must include at least input and output layers.");
-        }
-        layers.reserve(topology.size());
-        for (size_t i = 0; i < topology.size(); ++i) {
-            size_t nextCount = (i + 1 < topology.size()) ? topology[i + 1] : 0;
-            bool isInput = i == 0;
-            layers.emplace_back(topology[i], nextCount, isInput);
+    // Create network from topology (e.g., {2, 3, 1} = 2 inputs, 3 hidden, 1 output)
+    NeuralNetwork(const std::vector<int>& topology, double lr = 0.5) 
+        : learningRate(lr) {
+        for (size_t i = 0; i < topology.size(); i++) {
+            int numOutputs = (i < topology.size() - 1) ? topology[i + 1] : 0;
+            bool isInput = (i == 0);
+            layers.emplace_back(topology[i], numOutputs, isInput);
         }
     }
 
-    std::vector<double> feedForward(const std::vector<double> &inputs) {
-        if (inputs.size() != layers.front().neurons.size()) {
-            throw std::invalid_argument("Input size does not match input layer.");
+    // Forward pass: compute output from inputs
+    std::vector<double> predict(const std::vector<double>& inputs) {
+        // Set input layer values
+        for (size_t i = 0; i < inputs.size(); i++) {
+            layers[0].neurons[i].value = inputs[i];
         }
-        for (size_t i = 0; i < inputs.size(); ++i) {
-            layers.front().neurons[i].value = inputs[i];
-        }
-        for (size_t layerIdx = 1; layerIdx < layers.size(); ++layerIdx) {
-            Layer &prev = layers[layerIdx - 1];
-            Layer &curr = layers[layerIdx];
-            for (size_t j = 0; j < curr.neurons.size(); ++j) {
-                double sum = 0.0;
-                for (size_t i = 0; i < prev.neurons.size(); ++i) {
-                    sum += prev.neurons[i].value * prev.neurons[i].outgoingWeights[j];
+
+        // Propagate through each layer
+        for (size_t L = 1; L < layers.size(); L++) {
+            Layer& prevLayer = layers[L - 1];
+            Layer& currLayer = layers[L];
+
+            for (size_t j = 0; j < currLayer.neurons.size(); j++) {
+                double sum = currLayer.neurons[j].bias;
+                
+                // Sum weighted inputs from previous layer
+                for (size_t i = 0; i < prevLayer.neurons.size(); i++) {
+                    sum += prevLayer.neurons[i].value * prevLayer.neurons[i].weights[j];
                 }
-                sum += curr.neurons[j].bias;
-                curr.neurons[j].value = MathUtils::sigmoid(sum);
+                
+                currLayer.neurons[j].value = MathUtils::sigmoid(sum);
             }
         }
+
+        // Collect output values
         std::vector<double> outputs;
-        Layer &outputLayer = layers.back();
-        outputs.reserve(outputLayer.neurons.size());
-        for (const auto &n : outputLayer.neurons) {
+        for (const Neuron& n : layers.back().neurons) {
             outputs.push_back(n.value);
         }
         return outputs;
     }
 
-    void backPropagate(const std::vector<double> &targets) {
-        Layer &outputLayer = layers.back();
-        if (targets.size() != outputLayer.neurons.size()) {
-            throw std::invalid_argument("Target size does not match output layer.");
-        }
+    // Backward pass: compute gradients and update weights
+    void backpropagate(const std::vector<double>& targets) {
+        Layer& outputLayer = layers.back();
 
-        // Output gradients
-        for (size_t i = 0; i < outputLayer.neurons.size(); ++i) {
+        // Step 1: Calculate output layer gradients
+        for (size_t i = 0; i < outputLayer.neurons.size(); i++) {
             double output = outputLayer.neurons[i].value;
             double error = targets[i] - output;
-            outputLayer.neurons[i].gradient = error * MathUtils::sigmoidDerivativeFromOutput(output);
+            outputLayer.neurons[i].gradient = error * MathUtils::sigmoidDerivative(output);
         }
 
-        // Hidden gradients
-        for (size_t layerIdx = layers.size() - 2; layerIdx > 0; --layerIdx) {
-            Layer &curr = layers[layerIdx];
-            Layer &next = layers[layerIdx + 1];
-            for (size_t i = 0; i < curr.neurons.size(); ++i) {
-                double downstream = 0.0;
-                for (size_t j = 0; j < next.neurons.size(); ++j) {
-                    downstream += curr.neurons[i].outgoingWeights[j] * next.neurons[j].gradient;
+        // Step 2: Calculate hidden layer gradients (back to front)
+        for (int L = layers.size() - 2; L > 0; L--) {
+            Layer& currLayer = layers[L];
+            Layer& nextLayer = layers[L + 1];
+
+            for (size_t i = 0; i < currLayer.neurons.size(); i++) {
+                double errorSum = 0.0;
+                for (size_t j = 0; j < nextLayer.neurons.size(); j++) {
+                    errorSum += currLayer.neurons[i].weights[j] * nextLayer.neurons[j].gradient;
                 }
-                curr.neurons[i].gradient = MathUtils::sigmoidDerivativeFromOutput(curr.neurons[i].value) * downstream;
+                double output = currLayer.neurons[i].value;
+                currLayer.neurons[i].gradient = errorSum * MathUtils::sigmoidDerivative(output);
             }
         }
 
-        // Update weights and biases
-        for (size_t layerIdx = 0; layerIdx < layers.size() - 1; ++layerIdx) {
-            Layer &curr = layers[layerIdx];
-            Layer &next = layers[layerIdx + 1];
-            for (size_t i = 0; i < curr.neurons.size(); ++i) {
-                for (size_t j = 0; j < next.neurons.size(); ++j) {
-                    double delta = learningRate * next.neurons[j].gradient * curr.neurons[i].value;
-                    curr.neurons[i].outgoingWeights[j] += delta;
+        // Step 3: Update all weights and biases
+        for (size_t L = 0; L < layers.size() - 1; L++) {
+            Layer& currLayer = layers[L];
+            Layer& nextLayer = layers[L + 1];
+
+            for (size_t i = 0; i < currLayer.neurons.size(); i++) {
+                for (size_t j = 0; j < nextLayer.neurons.size(); j++) {
+                    double delta = learningRate * nextLayer.neurons[j].gradient * currLayer.neurons[i].value;
+                    currLayer.neurons[i].weights[j] += delta;
                 }
             }
-            for (auto &neuron : next.neurons) {
-                neuron.bias += learningRate * neuron.gradient;
+            for (Neuron& n : nextLayer.neurons) {
+                n.bias += learningRate * n.gradient;
             }
         }
     }
 
-    double train(const std::vector<Sample> &dataset, size_t epochs, size_t reportEvery = 0) {
-        double lastLoss = 0.0;
-        for (size_t epoch = 1; epoch <= epochs; ++epoch) {
-            double epochLoss = 0.0;
-            for (const auto &sample : dataset) {
-                auto outputs = feedForward(sample.inputs);
-                epochLoss += computeSampleLoss(outputs, sample.targets);
-                backPropagate(sample.targets);
+    // Train on dataset for specified epochs
+    void train(const std::vector<Sample>& data, int epochs, bool showProgress = true) {
+        int reportInterval = std::max(1, epochs / 10);
+
+        for (int epoch = 1; epoch <= epochs; epoch++) {
+            double totalLoss = 0.0;
+
+            for (const Sample& sample : data) {
+                std::vector<double> output = predict(sample.inputs);
+                totalLoss += computeLoss(output, sample.targets);
+                backpropagate(sample.targets);
             }
-            epochLoss /= static_cast<double>(dataset.size());
-            lastLoss = epochLoss;
-            if (reportEvery != 0 && epoch % reportEvery == 0) {
-                std::cout << "Epoch " << epoch << " loss: " << epochLoss << "\n";
+
+            if (showProgress && epoch % reportInterval == 0) {
+                double avgLoss = totalLoss / data.size();
+                std::cout << "  Epoch " << std::setw(5) << epoch 
+                          << " | Loss: " << std::fixed << std::setprecision(6) << avgLoss << "\n";
             }
         }
-        return lastLoss;
     }
 
-    std::vector<double> predict(const std::vector<double> &inputs) {
-        return feedForward(inputs);
-    }
-
-    double computeLoss(const std::vector<Sample> &dataset) {
-        double total = 0.0;
-        for (const auto &sample : dataset) {
-            auto outputs = feedForward(sample.inputs);
-            total += computeSampleLoss(outputs, sample.targets);
-        }
-        return total / static_cast<double>(dataset.size());
-    }
-
-    void saveWeights(const std::string &filename) const;
-    void loadWeights(const std::string &filename);
-
-    std::vector<size_t> topology() const {
-        std::vector<size_t> topo;
-        topo.reserve(layers.size());
-        for (const auto &layer : layers) {
-            topo.push_back(layer.neurons.size());
-        }
-        return topo;
-    }
-
-    const std::vector<Layer> &getLayers() const { return layers; }
-    std::vector<Layer> &getLayers() { return layers; }
-    double getLearningRate() const { return learningRate; }
-
-private:
-    double computeSampleLoss(const std::vector<double> &outputs, const std::vector<double> &targets) {
+    // Compute mean squared error
+    double computeLoss(const std::vector<double>& output, const std::vector<double>& target) {
         double sum = 0.0;
-        for (size_t i = 0; i < outputs.size(); ++i) {
-            double diff = targets[i] - outputs[i];
+        for (size_t i = 0; i < output.size(); i++) {
+            double diff = target[i] - output[i];
             sum += diff * diff;
         }
         return sum / 2.0;
     }
 
+    // Total loss over entire dataset
+    double totalLoss(const std::vector<Sample>& data) {
+        double sum = 0.0;
+        for (const Sample& s : data) {
+            sum += computeLoss(predict(s.inputs), s.targets);
+        }
+        return sum / data.size();
+    }
+
+    // Save weights to file
+    void saveWeights(const std::string& filename) {
+        std::ofstream file(filename);
+        if (!file) {
+            std::cerr << "Error: Cannot save to " << filename << "\n";
+            return;
+        }
+
+        // Write topology
+        file << layers.size() << "\n";
+        for (const Layer& layer : layers) {
+            file << layer.neurons.size() << " ";
+        }
+        file << "\n";
+
+        // Write weights and biases
+        for (const Layer& layer : layers) {
+            for (const Neuron& n : layer.neurons) {
+                file << n.bias;
+                for (double w : n.weights) {
+                    file << " " << w;
+                }
+                file << "\n";
+            }
+        }
+        std::cout << "Saved to " << filename << "\n";
+    }
+
+    // Load weights from file
+    bool loadWeights(const std::string& filename) {
+        std::ifstream file(filename);
+        if (!file) {
+            std::cerr << "Error: Cannot open " << filename << "\n";
+            return false;
+        }
+
+        size_t numLayers;
+        file >> numLayers;
+
+        std::vector<int> topology(numLayers);
+        for (size_t i = 0; i < numLayers; i++) {
+            file >> topology[i];
+        }
+
+        // Rebuild network with loaded topology
+        layers.clear();
+        for (size_t i = 0; i < topology.size(); i++) {
+            int numOutputs = (i < topology.size() - 1) ? topology[i + 1] : 0;
+            layers.emplace_back(topology[i], numOutputs, i == 0);
+        }
+
+        // Load weights and biases
+        for (Layer& layer : layers) {
+            for (Neuron& n : layer.neurons) {
+                file >> n.bias;
+                for (double& w : n.weights) {
+                    file >> w;
+                }
+            }
+        }
+        std::cout << "Loaded from " << filename << "\n";
+        return true;
+    }
+
+private:
     std::vector<Layer> layers;
-    double learningRate = 0.1;
 };
 
-class ModelIO {
-public:
-    static void save(const NeuralNetwork &net, const std::string &filename) {
-        std::ofstream out(filename);
-        if (!out) {
-            throw std::runtime_error("Failed to open file for saving: " + filename);
-        }
-        auto topo = net.topology();
-        out << topo.size() << "\n";
-        for (size_t size : topo) {
-            out << size << " ";
-        }
-        out << "\n";
-
-        const auto &layers = net.getLayers();
-        for (size_t layerIdx = 0; layerIdx < layers.size(); ++layerIdx) {
-            const auto &layer = layers[layerIdx];
-            for (size_t nIdx = 0; nIdx < layer.neurons.size(); ++nIdx) {
-                const auto &n = layer.neurons[nIdx];
-                out << n.bias << " " << n.outgoingWeights.size();
-                for (double w : n.outgoingWeights) {
-                    out << " " << w;
-                }
-                out << "\n";
-            }
-        }
-    }
-
-    static NeuralNetwork load(const std::string &filename, double learningRate) {
-        std::ifstream in(filename);
-        if (!in) {
-            throw std::runtime_error("Failed to open file for loading: " + filename);
-        }
-        size_t layerCount = 0;
-        in >> layerCount;
-        if (layerCount < 2) {
-            throw std::runtime_error("Invalid topology in file.");
-        }
-        std::vector<size_t> topo(layerCount);
-        for (size_t i = 0; i < layerCount; ++i) {
-            in >> topo[i];
-        }
-        NeuralNetwork net(topo, learningRate);
-        auto &layers = net.getLayers();
-        for (size_t layerIdx = 0; layerIdx < layers.size(); ++layerIdx) {
-            auto &layer = layers[layerIdx];
-            for (size_t nIdx = 0; nIdx < layer.neurons.size(); ++nIdx) {
-                auto &n = layer.neurons[nIdx];
-                size_t outgoingSize = 0;
-                in >> n.bias >> outgoingSize;
-                n.outgoingWeights.resize(outgoingSize);
-                for (size_t wIdx = 0; wIdx < outgoingSize; ++wIdx) {
-                    in >> n.outgoingWeights[wIdx];
-                }
-            }
-        }
-        return net;
-    }
-};
-
-void NeuralNetwork::saveWeights(const std::string &filename) const {
-    ModelIO::save(*this, filename);
-}
-
-void NeuralNetwork::loadWeights(const std::string &filename) {
-    NeuralNetwork loaded = ModelIO::load(filename, learningRate);
-    *this = loaded;
-}
-
+// ============================================================================
+// Dataset - Provides training data
+// ============================================================================
 class Dataset {
 public:
-    static std::vector<Sample> xorDataset() {
+    // Classic XOR problem - a simple non-linear classification task
+    static std::vector<Sample> XOR() {
         return {
-            {{0.0, 0.0}, {0.0}},
-            {{0.0, 1.0}, {1.0}},
-            {{1.0, 0.0}, {1.0}},
-            {{1.0, 1.0}, {0.0}},
+            {{0, 0}, {0}},
+            {{0, 1}, {1}},
+            {{1, 0}, {1}},
+            {{1, 1}, {0}}
         };
     }
 };
 
-static void printPredictions(NeuralNetwork &net, const std::vector<Sample> &data) {
+// ============================================================================
+// Helper functions for CLI
+// ============================================================================
+void printPredictions(NeuralNetwork& net, const std::vector<Sample>& data) {
     std::cout << std::fixed << std::setprecision(4);
-    for (const auto &sample : data) {
-        auto out = net.predict(sample.inputs);
-        std::cout << "Input [" << sample.inputs[0] << ", " << sample.inputs[1]
-                  << "] -> Predicted: " << out[0] << " Target: " << sample.targets[0] << "\n";
+    std::cout << "\n  Input     | Predicted | Target\n";
+    std::cout << "  ----------|-----------|-------\n";
+    for (const Sample& s : data) {
+        auto out = net.predict(s.inputs);
+        std::cout << "  [" << s.inputs[0] << ", " << s.inputs[1] << "]"
+                  << "  |   " << out[0] 
+                  << "   |  " << s.targets[0] << "\n";
     }
 }
 
-static void runDemo(size_t epochs, double lr) {
-    std::vector<size_t> topo{2, 3, 1};
-    NeuralNetwork net(topo, lr);
-    auto data = Dataset::xorDataset();
-
-    std::cout << "Before training (random weights):\n";
-    printPredictions(net, data);
-
-    net.train(data, epochs, epochs / 10);
-    double finalLoss = net.computeLoss(data);
-
-    std::cout << "\nAfter training:\n";
-    printPredictions(net, data);
-    std::cout << "Final loss: " << finalLoss << "\n";
+void printMenu() {
+    std::cout << "\n========================================\n";
+    std::cout << "       NeuralNet++ Interactive Menu\n";
+    std::cout << "========================================\n";
+    std::cout << "  1. Train network on XOR\n";
+    std::cout << "  2. Test current network\n";
+    std::cout << "  3. Predict custom input\n";
+    std::cout << "  4. Save weights to file\n";
+    std::cout << "  5. Load weights from file\n";
+    std::cout << "  6. Run full demo\n";
+    std::cout << "  0. Exit\n";
+    std::cout << "----------------------------------------\n";
+    std::cout << "  Choice: ";
 }
 
-static void printUsage() {
-    std::cout << "NeuralNet++ CLI\n"
-                 "Usage:\n"
-                 "  neuralnet demo [--epochs N] [--lr V]\n"
-                 "  neuralnet train [--epochs N] [--lr V] [--save file]\n"
-                 "  neuralnet test [--weights file]\n"
-                 "  neuralnet predict x y [--weights file]\n"
-                 "  neuralnet save file\n"
-                 "  neuralnet load file\n";
+void runDemo() {
+    std::cout << "\n=== XOR Demo ===\n";
+    std::cout << "Creating network with topology: 2 -> 3 -> 1\n";
+    
+    NeuralNetwork net({2, 3, 1}, 0.5);
+    auto data = Dataset::XOR();
+
+    std::cout << "\nBEFORE training (random weights):";
+    printPredictions(net, data);
+    std::cout << "\nLoss: " << std::fixed << std::setprecision(6) << net.totalLoss(data) << "\n";
+
+    std::cout << "\nTraining for 5000 epochs...\n";
+    net.train(data, 5000);
+
+    std::cout << "\nAFTER training:";
+    printPredictions(net, data);
+    std::cout << "\nFinal Loss: " << net.totalLoss(data) << "\n";
 }
 
-int main(int argc, char **argv) {
-    if (argc == 1) {
-        printUsage();
-        std::cout << "\nRunning demo with defaults...\n";
-        runDemo(5000, 0.5);
+// ============================================================================
+// Main - Interactive CLI
+// ============================================================================
+int main(int argc, char* argv[]) {
+    std::cout << "\n";
+    std::cout << "  _   _                      _  _   _      _   \n";
+    std::cout << " | \\ | | ___ _   _ _ __ __ _| || \\ | | ___| |_ \n";
+    std::cout << " |  \\| |/ _ \\ | | | '__/ _` | ||  \\| |/ _ \\ __|\n";
+    std::cout << " | |\\  |  __/ |_| | | | (_| | || |\\  |  __/ |_ \n";
+    std::cout << " |_| \\_|\\___|\\__,_|_|  \\__,_|_||_| \\_|\\___|\\__| ++\n";
+    std::cout << "\n A Simple Neural Network Engine in C++\n";
+
+    // Quick command-line mode
+    if (argc > 1 && std::string(argv[1]) == "demo") {
+        runDemo();
         return 0;
     }
 
-    std::string cmd = argv[1];
-    size_t epochs = 5000;
-    double lr = 0.5;
-    std::string filename;
-    std::vector<size_t> topo{2, 3, 1};
-    NeuralNetwork net(topo, lr);
-    auto data = Dataset::xorDataset();
+    // Interactive mode
+    NeuralNetwork net({2, 3, 1}, 0.5);
+    auto data = Dataset::XOR();
+    bool trained = false;
 
-    auto parseOption = [&](const std::string &flag, const std::string &value) {
-        if (flag == "--epochs") {
-            epochs = static_cast<size_t>(std::stoul(value));
-        } else if (flag == "--lr") {
-            lr = std::stod(value);
-        } else if (flag == "--save" || flag == "--weights") {
-            filename = value;
+    while (true) {
+        printMenu();
+        
+        int choice;
+        std::cin >> choice;
+
+        if (choice == 0) {
+            std::cout << "\nGoodbye!\n";
+            break;
         }
-    };
 
-    for (int i = 2; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg == "--epochs" || arg == "--lr" || arg == "--save" || arg == "--weights") {
-            if (i + 1 >= argc) {
-                throw std::invalid_argument("Missing value for option " + arg);
+        switch (choice) {
+            case 1: {  // Train
+                int epochs;
+                double lr;
+                std::cout << "  Epochs (e.g., 5000): ";
+                std::cin >> epochs;
+                std::cout << "  Learning rate (e.g., 0.5): ";
+                std::cin >> lr;
+                
+                net = NeuralNetwork({2, 3, 1}, lr);
+                std::cout << "\nTraining...\n";
+                net.train(data, epochs);
+                trained = true;
+                
+                std::cout << "\nResults:";
+                printPredictions(net, data);
+                std::cout << "\nFinal Loss: " << std::fixed << std::setprecision(6) 
+                          << net.totalLoss(data) << "\n";
+                break;
             }
-            parseOption(arg, argv[++i]);
+            case 2: {  // Test
+                if (!trained) {
+                    std::cout << "\n  Note: Network has random weights (not trained yet)\n";
+                }
+                printPredictions(net, data);
+                std::cout << "\nLoss: " << std::fixed << std::setprecision(6) 
+                          << net.totalLoss(data) << "\n";
+                break;
+            }
+            case 3: {  // Predict
+                double x, y;
+                std::cout << "  Enter input x (0 or 1): ";
+                std::cin >> x;
+                std::cout << "  Enter input y (0 or 1): ";
+                std::cin >> y;
+                
+                auto result = net.predict({x, y});
+                std::cout << "\n  Prediction for [" << x << ", " << y << "]: " 
+                          << std::fixed << std::setprecision(4) << result[0] << "\n";
+                break;
+            }
+            case 4: {  // Save
+                std::string filename;
+                std::cout << "  Filename: ";
+                std::cin >> filename;
+                net.saveWeights(filename);
+                break;
+            }
+            case 5: {  // Load
+                std::string filename;
+                std::cout << "  Filename: ";
+                std::cin >> filename;
+                if (net.loadWeights(filename)) {
+                    trained = true;
+                }
+                break;
+            }
+            case 6: {  // Demo
+                runDemo();
+                break;
+            }
+            default:
+                std::cout << "  Invalid choice. Try again.\n";
         }
-    }
-
-    net = NeuralNetwork(topo, lr);
-
-    if (cmd == "demo") {
-        runDemo(epochs, lr);
-    } else if (cmd == "train") {
-        double initialLoss = net.computeLoss(data);
-        std::cout << "Initial loss: " << initialLoss << "\n";
-        double finalLoss = net.train(data, epochs, epochs / 10);
-        finalLoss = net.computeLoss(data);
-        std::cout << "Final loss: " << finalLoss << "\n";
-        printPredictions(net, data);
-        if (!filename.empty()) {
-            net.saveWeights(filename);
-            std::cout << "Saved weights to " << filename << "\n";
-        }
-    } else if (cmd == "test") {
-        if (!filename.empty()) {
-            net.loadWeights(filename);
-            std::cout << "Loaded weights from " << filename << "\n";
-        }
-        printPredictions(net, data);
-        std::cout << "Loss: " << net.computeLoss(data) << "\n";
-    } else if (cmd == "predict") {
-        if (argc < 4) {
-            throw std::invalid_argument("predict requires two inputs (x y).");
-        }
-        double x = std::stod(argv[2]);
-        double y = std::stod(argv[3]);
-        if (!filename.empty()) {
-            net.loadWeights(filename);
-            std::cout << "Loaded weights from " << filename << "\n";
-        }
-        auto out = net.predict({x, y});
-        std::cout << "Prediction for [" << x << ", " << y << "]: " << out[0] << "\n";
-    } else if (cmd == "save") {
-        if (argc < 3) {
-            throw std::invalid_argument("save requires filename.");
-        }
-        net.saveWeights(argv[2]);
-        std::cout << "Saved weights to " << argv[2] << "\n";
-    } else if (cmd == "load") {
-        if (argc < 3) {
-            throw std::invalid_argument("load requires filename.");
-        }
-        net.loadWeights(argv[2]);
-        std::cout << "Loaded weights from " << argv[2] << "\n";
-        printPredictions(net, data);
-    } else {
-        printUsage();
-        throw std::invalid_argument("Unknown command: " + cmd);
     }
 
     return 0;
