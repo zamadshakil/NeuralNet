@@ -32,7 +32,14 @@ enum class ActivationType {
     SIGMOID,
     RELU,
     LEAKY_RELU,
-    TANH
+    LEAKY_RELU,
+    TANH,
+    SOFTMAX
+};
+
+enum class OptimizerType {
+    SGD,
+    ADAM
 };
 
 string activationName(ActivationType t) {
@@ -41,6 +48,7 @@ string activationName(ActivationType t) {
         case ActivationType::RELU:       return "ReLU";
         case ActivationType::LEAKY_RELU: return "Leaky ReLU";
         case ActivationType::TANH:       return "Tanh";
+        case ActivationType::SOFTMAX:    return "Softmax";
     }
     return "Unknown";
 }
@@ -106,8 +114,20 @@ public:
 
     static double randomWeight() {
         static mt19937 rng(random_device{}());
-        static uniform_real_distribution<double> dist(-1.0, 1.0);
+        static uniform_real_distribution<double> dist(-0.5, 0.5); // Smaller initialization for stability
         return dist(rng);
+    }
+
+    static void softmax(vector<double>& values) {
+        double maxVal = -1e9;
+        for (double v : values) if (v > maxVal) maxVal = v;
+        
+        double sum = 0.0;
+        for (double& v : values) {
+            v = exp(v - maxVal);
+            sum += v;
+        }
+        for (double& v : values) v /= sum;
     }
 };
 
@@ -130,9 +150,16 @@ public:
     double gradient = 0.0;
     vector<double> weights;
 
+    // Adam Optimizer Cache
+    vector<double> m_weights, v_weights;
+    double m_bias = 0.0, v_bias = 0.0;
+
     Neuron(int numOutputs, bool hasBias = true) {
         bias = hasBias ? MathUtils::randomWeight() : 0.0;
         weights.resize(numOutputs);
+        m_weights.resize(numOutputs, 0.0);
+        v_weights.resize(numOutputs, 0.0);
+
         for (double& w : weights) {
             w = MathUtils::randomWeight();
         }
@@ -490,10 +517,18 @@ class NeuralNetwork {
 public:
     double learningRate;
     ActivationType activation;
+    OptimizerType optimizer;
+    
+    // Adam specific parameters
+    double beta1 = 0.9;
+    double beta2 = 0.999;
+    double epsilon = 1e-8;
+    int timeStep = 0;
 
-    NeuralNetwork(const vector<int>& topology, double lr = 0.5,
-                  ActivationType act = ActivationType::SIGMOID)
-        : learningRate(lr), activation(act) {
+    NeuralNetwork(const vector<int>& topology, double lr = 0.01,
+                  ActivationType act = ActivationType::SIGMOID,
+                  OptimizerType opt = OptimizerType::SGD)
+        : learningRate(lr), activation(act), optimizer(opt) {
         for (size_t i = 0; i < topology.size(); i++) {
             int numOutputs = (i < topology.size() - 1) ? topology[i + 1] : 0;
             bool isInput = (i == 0);
@@ -520,6 +555,16 @@ public:
                 currLayer.neurons[j].rawSum = sum;
                 currLayer.neurons[j].value = MathUtils::activate(sum, activation);
             }
+
+            // Apply Softmax on the output layer if selected
+            if (L == layers.size() - 1 && activation == ActivationType::SOFTMAX) {
+                vector<double> values;
+                for (const auto& n : currLayer.neurons) values.push_back(n.rawSum);
+                MathUtils::softmax(values);
+                for (size_t i = 0; i < currLayer.neurons.size(); i++) {
+                    currLayer.neurons[i].value = values[i];
+                }
+            }
         }
 
         vector<double> outputs;
@@ -535,8 +580,15 @@ public:
         for (size_t i = 0; i < outputLayer.neurons.size(); i++) {
             double output = outputLayer.neurons[i].value;
             double error = targets[i] - output;
-            // For ReLU variants, derivative is based on the rawSum/output depending on type
-            outputLayer.neurons[i].gradient = error * MathUtils::activateDerivative(output, activation);
+            
+            if (activation == ActivationType::SOFTMAX) {
+                // For Softmax + Cross Entropy, gradient is just (target - output)
+                // Since we add to gradient in backprop, and we defined error = target - output
+                // The direction is correct. MathUtils::activateDerivative not needed or set to 1.
+                outputLayer.neurons[i].gradient = error; 
+            } else {
+                outputLayer.neurons[i].gradient = error * MathUtils::activateDerivative(output, activation);
+            }
         }
 
         for (int L = layers.size() - 2; L > 0; L--) {
@@ -559,12 +611,48 @@ public:
 
             for (size_t i = 0; i < currLayer.neurons.size(); i++) {
                 for (size_t j = 0; j < nextLayer.neurons.size(); j++) {
-                    double delta = learningRate * nextLayer.neurons[j].gradient * currLayer.neurons[i].value;
-                    currLayer.neurons[i].weights[j] += delta;
+                    double gradient = nextLayer.neurons[j].gradient * currLayer.neurons[i].value;
+                    
+                    if (optimizer == OptimizerType::ADAM) {
+                        // Adam Update for Weight
+                        double& m = currLayer.neurons[i].m_weights[j];
+                        double& v = currLayer.neurons[i].v_weights[j];
+                        
+                        // Gradients are calculated for gradient ASCENT in this implementation (target - output)
+                        // So we use (+) gradient.
+                        
+                        m = beta1 * m + (1 - beta1) * gradient;
+                        v = beta2 * v + (1 - beta2) * gradient * gradient;
+                        
+                        double m_hat = m / (1 - pow(beta1, timeStep));
+                        double v_hat = v / (1 - pow(beta2, timeStep));
+                        
+                        currLayer.neurons[i].weights[j] += learningRate * m_hat / (sqrt(v_hat) + epsilon);
+                    } else {
+                        // SGD
+                        currLayer.neurons[i].weights[j] += learningRate * gradient;
+                    }
                 }
             }
+            
+            // Bias updates
             for (Neuron& n : nextLayer.neurons) {
-                n.bias += learningRate * n.gradient;
+                double gradient = n.gradient;
+                
+                if (optimizer == OptimizerType::ADAM) {
+                    double& m = n.m_bias;
+                    double& v = n.v_bias;
+                    
+                    m = beta1 * m + (1 - beta1) * gradient;
+                    v = beta2 * v + (1 - beta2) * gradient * gradient;
+                    
+                    double m_hat = m / (1 - pow(beta1, timeStep));
+                    double v_hat = v / (1 - pow(beta2, timeStep));
+                    
+                    n.bias += learningRate * m_hat / (sqrt(v_hat) + epsilon);
+                } else {
+                    n.bias += learningRate * gradient;
+                }
             }
         }
     }
@@ -576,6 +664,7 @@ public:
             double totalLoss = 0.0;
 
             for (const Sample& sample : data) {
+                timeStep++; // Increment for Adam
                 vector<double> output = predict(sample.inputs);
                 totalLoss += computeLoss(output, sample.targets);
                 backpropagate(sample.targets);
@@ -590,12 +679,24 @@ public:
     }
 
     double computeLoss(const vector<double>& output, const vector<double>& target) {
-        double sum = 0.0;
-        for (size_t i = 0; i < output.size(); i++) {
-            double diff = target[i] - output[i];
-            sum += diff * diff;
+        if (activation == ActivationType::SOFTMAX) {
+            // Cross-Entropy Loss
+            double sum = 0.0;
+            for (size_t i = 0; i < output.size(); i++) {
+                // Avoid log(0)
+                double val = max(output[i], 1e-15); 
+                sum += target[i] * log(val);
+            }
+            return -sum; 
+        } else {
+            // MSE
+            double sum = 0.0;
+            for (size_t i = 0; i < output.size(); i++) {
+                double diff = target[i] - output[i];
+                sum += diff * diff;
+            }
+            return sum / 2.0;
         }
-        return sum / 2.0;
     }
 
     double totalLoss(const vector<Sample>& data) {
@@ -772,10 +873,11 @@ void printMenu() {
 }
 
 void runDemo() {
-    cout << "\n=== XOR Demo ===\n";
-    cout << "Creating network with topology: 2 -> 3 -> 1\n";
+    cout << "\n=== XOR Demo (Adam + ReLU) ===\n";
+    cout << "Creating network with topology: 2 -> 4 -> 1\n";
     
-    NeuralNetwork net({2, 3, 1}, 0.5);
+    // Using Adam and ReLU for faster convergence
+    NeuralNetwork net({2, 4, 1}, 0.01, ActivationType::RELU, OptimizerType::ADAM);
     auto data = Dataset::XOR();
 
     cout << "\nBEFORE training (random weights):";
