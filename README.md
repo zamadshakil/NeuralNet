@@ -1,236 +1,68 @@
-# NeuralNet++   
+# NeuralNet++ 
 
-A simple, object-oriented feed-forward neural network engine in C++.  
-It demonstrates OOP composition, memory management, backpropagation, and a classic XOR demo.  
+A powerful, single-file C++ neural network engine.
+It demonstrates OOP composition, memory management, backpropagation, and now includes a full CSV data pipeline.
 
-## 🚀 Features  
-- **Clean OOP design**: `NeuralNetwork` → `Layer` → `Neuron`.  
-- **Training**: Backpropagation with sigmoid activation and mean squared error.  
-- **Persistence**: Save and load weights/biases in a custom text format.  
-- **Interactive CLI**: Menu-driven training, testing, and custom predictions.  
-- **Demo mode**: Fast XOR dataset training and evaluation.  
+## 🚀 Features
+- **Clean OOP design**: `NeuralNetwork` → `Layer` → `Neuron`
+- **CSV Loading**: Load headers, handle quotes, select input/target columns
+- **Preprocessing**: Min-Max & Z-Score normalization, randomized Train/Test splitting
+- **Activations**: Sigmoid, ReLU, Leaky ReLU, Tanh
+- **Training**: Backpropagation with configurable topology and learning rate
+- **Persistence**: Save and load model weights
+- **Interactive CLI**: Menu-driven workflow for the entire pipeline
 
-## ⚙️ MathUtils  
-Utility class providing core mathematical functions used by the network.  
+## 📦 Getting Started
 
-### Functions  
-- `sigmoid(x)`  
-  Returns 1 / (1 + exp(-x)), squashing any real number to (0,1).  
-- `sigmoidDerivative(sigmoidOutput)`  
-  Calculates derivative as `sigmoidOutput * (1 - sigmoidOutput)`.  
-- `randomWeight()`  
-  Generates a random double between -1.0 and 1.0 using `mt19937`.  
+### 1. Compilation
+Requires a C++17 compiler (GCC, Clang, MSVC).
 
-```cpp
-double x = 0.5;
-double y = MathUtils::sigmoid(x);            // 0.622459
-double grad = MathUtils::sigmoidDerivative(y);
-double w = MathUtils::randomWeight();        // e.g., -0.345672
-```  
+```bash
+g++ -std=c++17 -o neuralnet src/main.cpp
+```
 
-## 🔢 Sample  
-Simple struct representing one training example.  
-- `inputs`: vector of input values.  
-- `targets`: vector of expected outputs.  
-
-```cpp
-struct Sample {
-  vector<double> inputs;
-  vector<double> targets;
-};
-```  
-
-## 🧠 Neuron & Layer  
-
-### Neuron  
-Represents a single node.  
-- `value`: current activation.  
-- `bias`: bias term (random-initialized).  
-- `gradient`: error gradient for backprop.  
-- `weights`: outgoing weights to next layer.  
-
-```cpp
-Neuron n(numOutputs, hasBias);
-n.value    = 0.0;
-n.bias     = randomWeight();
-n.weights  = vector<double>(numOutputs);
-```  
-
-### Layer  
-Holds a collection of neurons at the same depth.  
-- Constructs each neuron with `numOutputs` weights.  
-- Input-layer neurons have no bias or outgoing weights.  
-
-```cpp
-Layer(int numNeurons, int numOutputs, bool isInputLayer = false) {
-  for (int i = 0; i < numNeurons; i++)
-    neurons.emplace_back(numOutputs, !isInputLayer);
-}
-```  
-
-## 🏗️ Architecture  
-
-Short class relationship overview.  
-
-```mermaid
-classDiagram
-    class NeuralNetwork {
-        + learningRate
-        + predict
-        + backpropagate
-        + train
-        + saveWeights
-        + loadWeights
-    }
-    class Layer {
-        - neurons
-    }
-    class Neuron {
-        - value
-        - bias
-        - gradient
-        - weights
-    }
-    class MathUtils {
-        + sigmoid
-        + sigmoidDerivative
-        + randomWeight
-    }
-    class Sample {
-        + inputs
-        + targets
-    }
-    class Dataset {
-        + XOR
-    }
-
-    NeuralNetwork *-- Layer : has
-    Layer *-- Neuron : contains
-    NeuralNetwork ..> MathUtils : uses
-    NeuralNetwork ..> Sample : trains on
-    Dataset --> Sample : returns
-```  
-
-## 🔄 NeuralNetwork  
-
-Core engine managing layers, forward pass, backpropagation, and I/O.  
-
-### Forward Pass  
-1. Assign input values to the first layer.  
-2. For each subsequent layer:  
-   - Sum `bias` + weighted outputs from previous layer.  
-   - Apply `sigmoid` to compute activation.  
-3. Return output-layer activations.  
-
-```cpp
-vector<double> predict(const vector<double>& inputs) {
-  layers[0].neurons[i].value = inputs[i];
-  for (L = 1; L < layers.size(); L++) {
-    double sum = bias;
-    sum += prevLayer.neurons[i].value * prevLayer.neurons[i].weights[j];
-    currLayer.neurons[j].value = MathUtils::sigmoid(sum);
-  }
-  return outputs;
-}
-```  
-
-### Backpropagation  
-1. **Output gradients**: `(target - output) * sigmoidDerivative(output)`.  
-2. **Hidden gradients**: weighted sum of next-layer gradients × derivative.  
-3. **Weight update**:  
-   - `Δweight = learningRate * gradient_next * value_curr`.  
-   - `bias += learningRate * gradient`.  
-
-```cpp
-// Compute output layer gradients
-double error = targets[i] - output;
-n.gradient = error * sigmoidDerivative(output);
-// Propagate to hidden layers
-errorSum += curr.weights[j] * nextLayer.neurons[j].gradient;
-curr.gradient = errorSum * sigmoidDerivative(curr.value);
-// Update weights & biases
-w += learningRate * nextGradient * currValue;
-bias += learningRate * nextGradient;
-```  
-
-### Training Loop  
-- Iterates over epochs and samples.  
-- Predicts, computes loss, backpropagates per sample.  
-- Optionally reports average loss every 10% of epochs.  
-
-```cpp
-for (int epoch = 1; epoch <= epochs; epoch++) {
-  for (auto& sample : data) {
-    auto out = predict(sample.inputs);
-    totalLoss += computeLoss(out, sample.targets);
-    backpropagate(sample.targets);
-  }
-  // report every epochs/10
-}
-```  
-
-## 💾 Persistence (Save/Load)  
-Allows weight reuse across runs.  
-
-- **File format**:  
-  1. Number of layers  
-  2. Neuron counts per layer  
-  3. For each neuron: `bias w0 w1 ...`  
-
-- **Save**:  
-  ```cpp
-  net.saveWeights("weights.txt");
-  ```
-- **Load**:  
-  ```cpp
-  net.loadWeights("weights.txt");
-  ```  
-
-## 🖥️ CLI Interface  
-
-Interactive menu guiding training, testing, and I/O.  
-
+### 2. Running
+**Interactive Mode:**
 ```bash
 ./neuralnet
 ```
 
-### Menu Options  
-- **1. Train network on XOR**  
-- **2. Test current network**  
-- **3. Predict custom input**  
-- **4. Save weights to file**  
-- **5. Load weights from file**  
-- **6. Run full demo**  
-- **0. Exit**  
-
-### Full Demo Mode  
-Quickly trains and tests a `2 → 3 → 1` network on the XOR dataset.  
-
+**Quick Demo (XOR):**
 ```bash
 ./neuralnet demo
-```  
+```
 
-## 🛠️ Compilation & Running  
-- Compile with **C++17**:  
-  ```bash
-  g++ -std=c++17 main.cpp -o neuralnet
-  clang++ -std=c++17 main.cpp -o neuralnet
-  ```  
-- Run interactive mode:  
-  ```bash
-  ./neuralnet
-  ```  
-- Run XOR demo:  
-  ```bash
-  ./neuralnet demo
-  ```  
+## 🧠 Workflow Example (Iris Dataset)
 
-## 🤔 Future Improvements  
-- Support custom topology via CLI.  
-- Add alternative activation functions (ReLU, Tanh).  
-- Load datasets from CSV files.  
-- Visualize loss curve in real time.  
+1. **Load CSV**: Select option **7** and enter `data/iris.csv`.
+   - Columns: Inputs `0,1,2,3`, Target `4`
+2. **Normalize**: Select option **8** (Min-Max recommended).
+3. **Split**: Select option **9** (e.g., 0.8 split).
+4. **Train**: Select option **10**.
+   - Topology: `4,8,3` (4 inputs, hidden layer of 8, 3 outputs)
+   - Activation: `ReLU` or `Tanh`
+5. **Test**: Select option **11** to verify accuracy on the test set.
 
-—  
-**Author**  
-Zamad Shakeel • BS AI Student, UCP Lahore
+## 🏗️ Architecture
+
+- **`NeuralNetwork`**: Manages layers and training loop.
+- **`Layer` / `Neuron`**: Core structural components.
+- **`MathUtils`**: Activation functions and derivatives.
+- **`CSVLoader`**: Parses text files into `Sample` vectors.
+- **`DataNormalizer`**: Scaling utilities.
+- **`DataSplitter`**: Random shuffling and splitting.
+
+## 💾 File Format
+Weights are saved as plain text:
+1. Topology (layer sizes)
+2. Activation function ID
+3. Weights & Biases for every neuron
+
+## 🤝 Contributing
+Feel free to open issues or PRs for new features like:
+- Momentum / Adam optimizers
+- Softmax output layer
+- Real-time loss visualization
+
+---
+**Author**: Zamad Shakeel
