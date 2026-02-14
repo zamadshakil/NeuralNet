@@ -553,7 +553,21 @@ public:
     }
   }
 
+  int getInputSize() const {
+    return layers.empty() ? 0 : layers.front().neurons.size();
+  }
+  int getOutputSize() const {
+    return layers.empty() ? 0 : layers.back().neurons.size();
+  }
+
   vector<double> predict(const vector<double> &inputs) {
+    if (layers.empty() || inputs.size() != layers[0].neurons.size()) {
+      // Return zero vector of checking for mismatch (or handle gracefully)
+      // For now, we return zeroes to prevent crash, but this usually indicates
+      // logic error
+      return vector<double>(getOutputSize(), 0.0);
+    }
+
     for (size_t i = 0; i < inputs.size(); i++) {
       layers[0].neurons[i].value = inputs[i];
     }
@@ -595,9 +609,22 @@ public:
   void backpropagate(const vector<double> &targets) {
     Layer &outputLayer = layers.back();
 
+    // Auto-detect sparse targets (e.g. class index [2.0]) when output is vector
+    bool sparseTarget = (targets.size() == 1 && outputLayer.neurons.size() > 1);
+    int targetClass = sparseTarget ? static_cast<int>(targets[0]) : -1;
+
     for (size_t i = 0; i < outputLayer.neurons.size(); i++) {
       double output = outputLayer.neurons[i].value;
-      double error = targets[i] - output;
+
+      double targetVal;
+      if (sparseTarget) {
+        targetVal = (i == (size_t)targetClass) ? 1.0 : 0.0;
+      } else {
+        // Safety check for bounds
+        targetVal = (i < targets.size()) ? targets[i] : 0.0;
+      }
+
+      double error = targetVal - output;
 
       if (activation == ActivationType::SOFTMAX) {
         // For Softmax + Cross Entropy, gradient is just (target - output)
@@ -704,20 +731,27 @@ public:
 
   double computeLoss(const vector<double> &output,
                      const vector<double> &target) {
+    bool sparseTarget = (target.size() == 1 && output.size() > 1);
+    int targetClass = sparseTarget ? static_cast<int>(target[0]) : -1;
+
     if (activation == ActivationType::SOFTMAX) {
       // Cross-Entropy Loss
       double sum = 0.0;
       for (size_t i = 0; i < output.size(); i++) {
         // Avoid log(0)
         double val = max(output[i], 1e-15);
-        sum += target[i] * log(val);
+        double t = sparseTarget ? ((i == (size_t)targetClass) ? 1.0 : 0.0)
+                                : ((i < target.size()) ? target[i] : 0.0);
+        sum += t * log(val);
       }
       return -sum;
     } else {
       // MSE
       double sum = 0.0;
       for (size_t i = 0; i < output.size(); i++) {
-        double diff = target[i] - output[i];
+        double t = sparseTarget ? ((i == (size_t)targetClass) ? 1.0 : 0.0)
+                                : ((i < target.size()) ? target[i] : 0.0);
+        double diff = t - output[i];
         sum += diff * diff;
       }
       return sum / 2.0;
@@ -748,8 +782,14 @@ public:
       } else {
         // Multi-class: argmax
         int predIdx = max_element(out.begin(), out.end()) - out.begin();
-        int targIdx =
-            max_element(s.targets.begin(), s.targets.end()) - s.targets.begin();
+        int targIdx;
+        if (s.targets.size() == 1 && out.size() > 1) {
+          targIdx = static_cast<int>(s.targets[0]);
+        } else {
+          targIdx = max_element(s.targets.begin(), s.targets.end()) -
+                    s.targets.begin();
+        }
+
         if (predIdx == targIdx)
           correct++;
       }
@@ -1040,7 +1080,8 @@ int main(int argc, char *argv[]) {
       break;
     }
     case 3: { // Predict custom input
-      cout << "  How many input values? ";
+      cout << "  How many input values? (Expected: " << net.getInputSize()
+           << "): ";
       int n;
       cin >> n;
       vector<double> inputs(n);
